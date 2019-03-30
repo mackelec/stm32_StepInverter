@@ -149,15 +149,18 @@ void setup()
   inverterTimer.setCompare(TIMER_CH4, 1);  
   inverterTimer.attachCompare4Interrupt(timer_Handler);
   inverterTimer.refresh();
-  inverterTimer.resume();
+  
   delay(1000);
   Serial << "stm32-StepInverter  Setup done" << endl;
   Serial.flush();
-  digitalWrite(LED,HIGH);
 
-  Serial << "Xfactor= " << Xfactor << endl;
-  Serial.flush();
-
+   //--- Starting with Inverter running for testing purposes.
+   //---   I prefer Inverter NOT to be running on power in real use.
+  inverterRunning = true;    // 
+  //digitalWrite(LED,HIGH);  // uncomment if startup with inverter off
+  
+  
+  inverterTimer.resume();
 
 }
 
@@ -264,6 +267,15 @@ void adcRead()
   adcValueV = data & 0xFFFF;
   adcValueI = data >> 16;
 }
+
+/*----------------------------
+ * 
+ *    Simple reading the bits 5 and 6 for ON - OFF control
+ *    -  Could probably use some filtering 
+ *         I'd use and optocouple and RC.
+ *         The off pin could be triggered O/C detection etc
+ * 
+ -----------------------------*/
 
 void readControl()
 {
