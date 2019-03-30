@@ -9,6 +9,9 @@ STM32ADC adcI(ADC2);
 uint8 adcPinV = PB0;
 uint8 adcPinI = PB1;
 
+#define pinSwOff PB6
+#define pinSwON  PB5
+
 volatile uint16 adcValueV;
 volatile uint16 adcValueI;
 
@@ -25,6 +28,7 @@ uint8 voltSteps;
 uint16 quarterSteps;
 int32  Xfactor;
 
+bool inverterRunning = false;
 
 HardwareTimer inverterTimer(4);
 
@@ -64,6 +68,10 @@ void setup()
   pinMode(PB13,OUTPUT);
   pinMode(PB14,OUTPUT);
   pinMode(PB15,OUTPUT);
+
+  pinMode(pinSwOff,INPUT_PULLDOWN);
+  pinMode(pinSwON,INPUT_PULLDOWN);
+  
   //---   BluePill onboard LED is turned by writing LOW 
   //        opposite of most arduino boards  
   digitalWrite(LED,LOW);
@@ -194,14 +202,22 @@ void timer_Handler()
    //          we just need to write it.
   uint16 mask=0;
   static int8 cnt=0;
+  
   byte portBlow = GPIOB->regs->ODR & 0x00ff;
+
+  if (!inverterRunning)
+  {
+    outputDrive = 0;
+    cycleIndex = 0;
+  }
+  
   mask = outputDrive<<8 | portBlow;
   //--- write PORTB 
   GPIOB->regs->ODR = mask;
  
     //--- now work out the next outputDrive value
   
-  proc_nextOutputValue();
+  if (inverterRunning)  proc_nextOutputValue();
 
     //---   Calculating expotential Moving Average values 
     //            for ADC values of voltage and current.
@@ -233,6 +249,7 @@ void timer_Handler()
   {
     cnt=0;
     adcRead();
+    readControl();
     do_avgV=true;
   }
   imReady = true;
@@ -246,6 +263,20 @@ void adcRead()
   uint32 data = ADC1->regs->DR;
   adcValueV = data & 0xFFFF;
   adcValueI = data >> 16;
+}
+
+void readControl()
+{
+  if (gpio_read_bit(GPIOB, 5))
+  {
+    inverterRunning = true;
+    digitalWrite(LED,LOW);
+  }
+  if (gpio_read_bit(GPIOB, 6))
+  {
+    inverterRunning = false;
+    digitalWrite(LED,HIGH);
+  }
 }
 
 /*------------------------------------------
