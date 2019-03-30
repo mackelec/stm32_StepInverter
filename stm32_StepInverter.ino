@@ -9,22 +9,27 @@ STM32ADC adcI(ADC2);
 uint8 adcPinV = PB0;
 uint8 adcPinI = PB1;
 
+volatile uint16 adcValueV;
+volatile uint16 adcValueI;
+
+volatile int32 avgADC_V;
+volatile int32 avgADC_I;
+
 byte  outputDrive = 0;    // Output Driver : High Byte of PORT B 
 uint16 cycleIndex;           // position within the cycle : between 0 to 1023 , 
 uint8  lastVoltageLookupIndex;
-uint16  batteryVoltage = 26500;
-int32 inputFactor = 1000;
+uint32  batteryVoltage = 26500;
+int32 inputFactor = 100;
 uint32 nominalBatteryMicroVolts;
 uint8 voltSteps;
 uint16 quarterSteps;
+int32  Xfactor;
 
-volatile uint16 adcValueV;
-volatile uint16 adcValueI;
 
 HardwareTimer inverterTimer(4);
 
 #define NOMINAL_VAC  240
-#define NOMINAL_BATTERY_VOLTAGE 26500    // in milliVolts
+#define NOMINAL_BATTERY_VOLTAGE 27000    // in milliVolts
 #define TRANSFORMER_COUNT 4
 #define STEPS 1024
 #define VOLTSTEPS   int(pow(3,TRANSFORMER_COUNT))
@@ -47,6 +52,8 @@ void setup()
   pinMode(PA4,OUTPUT);
   pinMode(PC14,OUTPUT);
   pinMode(PC15,OUTPUT);
+  pinMode(PB7,OUTPUT);
+  pinMode(PA15,OUTPUT);
   pinMode(LED,OUTPUT);
   //slow way
   pinMode(PB8,OUTPUT);
@@ -57,6 +64,8 @@ void setup()
   pinMode(PB13,OUTPUT);
   pinMode(PB14,OUTPUT);
   pinMode(PB15,OUTPUT);
+  //---   BluePill onboard LED is turned by writing LOW 
+  //        opposite of most arduino boards  
   digitalWrite(LED,LOW);
   delay(1000);
   Serial.flush();
@@ -68,31 +77,55 @@ void setup()
   voltSteps = int(pow(3,TRANSFORMER_COUNT));//voltSteps;
   quarterSteps = STEPS/4;
   nominalBatteryMicroVolts = NOMINAL_BATTERY_VOLTAGE * 1000;
+  /*---------------------------------
+   *    Xfactor : variable just get some of the calculations pre-done
+   * 
+   *    inputFactor : = Nominal_Battery_Voltage / real battery voltage * 100
+   *              
+   *    batteryVoltage = adc value / 4096 * full scale voltage  (I am using 30v >> 30000
+   *                     adcAVG is a factor of 100 x larger than adc
+   *                     
+   *    inputFact = Xfactor / adcAVG
+   *    Xfactor = NOMINAL_BATTERY_VOLTAGE * 4096 * 100 *100 /30000
+   *            = NOMINAL_BATTERY_VOLTAGE * 4096 /3
+   */
+  Xfactor = (int32) ((NOMINAL_BATTERY_VOLTAGE * 4096)/3);
   setTransformerVoltage();
   fill_TransformerMask();
   fill_outputDriveTable();
   fill_outputVoltageTable();
   fill_sineLookup();
 
-//  cycleIndex = 79;
-//  proc_nextOutputValue();
 
-//*******  ADC setup
+/*-----------------------------------------------
+ *  
+ *      ADC setup
+ *      
+ *      -  STM32F103 has dual ADCs so we may as well use them in simultaneous mode.
+ *      -  Setting it for continuous conversion so we don't waste time servicing it.
+ *      -  Using the the same scan rate as in the powerScope so it is faster than 6400Hz
+ *      -  Because it is in DUAL mode, the ADC2 conversion is started automatically by ADC1
+ *  
+ ------------------------------------------------*/
 
-//  adcV.calibrate();
-//  adcV.setSampleRate(ADC_SMPR_239_5);
-//  adcV.attachInterrupt(adcConvertedInt, ADC_EOC);
-//  adcV.setPins(&adcPinV, 1);
-//
-//  adcI.calibrate();
-//  adcI.setSampleRate(ADC_SMPR_239_5);
-//  //adcI.attachInterrupt(int_ADCI,, ADC2_EOC);
-//  adcI.setPins(&adcPinI, 1);
-//
-//    // -- sets up the adc control registers
-//    //    for Dual ADC, simultaneous sample
-//  ADC1->regs->CR1 |= 0x60000;
-//  ADC1->regs->CR2 |= 0x100;
+  adcV.calibrate();
+  adcV.setSampleRate(ADC_SMPR_239_5);
+  //adcV.attachInterrupt(adcConvertedInt, ADC_EOC);
+  adcV.setPins(&adcPinV, 1);
+  adcV.setContinuous();
+
+  adcI.calibrate();
+  adcI.setSampleRate(ADC_SMPR_239_5);
+  adcI.setPins(&adcPinI, 1);
+  adcI.setContinuous();
+
+    // -- sets up the adc control registers
+    //    for Dual ADC, simultaneous sample
+  ADC1->regs->CR1 |= 0x60000;
+  ADC1->regs->CR2 |= 0x100;
+
+  adcV.startConversion();
+  
   
   //*******  Timer setup  ( 19.52777777777777777778 microseconds, 51209.10384068278805121 Hz)
   //---  output Frquency = 50.00889046941678520626 Hz
@@ -110,47 +143,103 @@ void setup()
   inverterTimer.refresh();
   inverterTimer.resume();
   delay(1000);
-  Serial << "Setup done" << endl;
+  Serial << "stm32-StepInverter  Setup done" << endl;
   Serial.flush();
   digitalWrite(LED,HIGH);
+
+  Serial << "Xfactor= " << Xfactor << endl;
+  Serial.flush();
+
+
 }
 
-bool junk;
+
+/*-----------------------------------------
+ * 
+ *    timer_Handler
+ *    
+ *    -  is called by the Timer Interrupt
+ *    -  is called 1024 times per 50Hz cycle
+ * 
+ ------------------------------------------*/
+
+
 
 void timer_Handler()
 {
+  static bool do_avgV=false;
+  static bool do_avgI=false;
+   
+   //---   Set pin PA4 HIGH, gets cleared at end of handler
+   //        shows that all code is executed by the time next Timer interrupt is called   
   gpio_write_bit(GPIOA, 4, HIGH);
-  if (junk)
+  static bool junk;
+   //---   Toggle pin PC14, check timer on Scope
+  gpio_write_bit(GPIOC, 14, junk);
+  junk=!junk;
+
+   //---   Additional Trap to see if Code is too slow
+  static bool imReady=true;
+  if (!imReady)
   {
-    gpio_write_bit(GPIOC, 14, LOW);
-    junk=false;
+    gpio_write_bit(GPIOC, 15, HIGH);
   }
-  else
-  {
-    gpio_write_bit(GPIOC, 14, HIGH);
-    junk=true;
-  }
-  
+  imReady = false;
+
+   //---   Write the DRIVE OUTPUT (8 bits)
+   //      -   fyi, Port B is a 16 bit port
+   //      -   Writing to upper Byte, PB8 to PB15
+
+   //      -   global Var outputDrive is already set
+   //          we just need to write it.
   uint16 mask=0;
   static int8 cnt=0;
   byte portBlow = GPIOB->regs->ODR & 0x00ff;
   mask = outputDrive<<8 | portBlow;
   //--- write PORTB 
   GPIOB->regs->ODR = mask;
-
-  cnt++;
-  if (cnt>100)
-  {
-    cnt=0;
-    //adcV.startConversion();
-  }
-  //--- now work out the next driver value
+ 
+    //--- now work out the next outputDrive value
   
   proc_nextOutputValue();
-  
+
+    //---   Calculating expotential Moving Average values 
+    //            for ADC values of voltage and current.
+    //      -   Using 32bit int and multiplying the value by 100
+    //            to increase the resolution of integer math.
+    //      -   In an attempt to spread the processor work
+    //            avgADC_V is calc'ed one cycle after reading ADC and
+    //            avgADC_I is calc'ed one cycle after avgADC_V is calc'ed
+    
+  if (do_avgI)
+  {
+    avgADC_I = avgADC_I + (adcValueI*100 - avgADC_I)/16;
+    do_avgI = false;
+  }
+  if (do_avgV)
+  {
+    avgADC_V = avgADC_V + (adcValueV*100 - avgADC_V)/16;
+    do_avgV = false;
+    do_avgI = true;
+  }
+
+   //---  Read ADC values
+   //     -   do not read faster than 6400Hz, 
+   //         or no more than say one in three cycles.
+
+   //     - A count of 64 cycles resolves to 16 reads per 50Hz cycle
+  cnt++;
+  if (cnt>63)
+  {
+    cnt=0;
+    adcRead();
+    do_avgV=true;
+  }
+  imReady = true;
+  gpio_write_bit(GPIOA, 4, LOW);
 }
 
-void adcConvertedInt()
+void adcRead()
 {
   static uint16 lastADC = 0;
   //-- read adc 32bit data register
@@ -159,33 +248,64 @@ void adcConvertedInt()
   adcValueI = data >> 16;
 }
 
+/*------------------------------------------
+ * 
+ *    This is called by the timer_Handler after
+ *      writing outputDrive to the output Port.
+ *      
+ *    -  Keeps track of posiion with the 50Hz cycle (cycleIndex)
+ *    -  Calls the new cycle procedure.
+ *    -  Gets the desired Voltage at current step (cycleIndex)
+ *         from the Sinewave table (sineLookup) then finds the 
+ *         appropriate Transformer output to match (outputVoltageLookup), 
+ *         then outputDrive comes from corresponding table (outputMaskTable) 
+ * 
+ -------------------------------------------*/
+
+
 void proc_nextOutputValue()
 {
   cycleIndex ++;
   if (cycleIndex >= STEPS) 
   {
+    //gpio_write_bit(GPIOB, 7, HIGH);
+    avgADC_V = 368640;   // comment out when activating ADC
     cycleIndex = 0;
-    //proc_NewCycle();
+    proc_NewCycle();    
     outputDrive = outputMaskTable[0];
-    gpio_write_bit(GPIOA, 4, LOW);
+    //gpio_write_bit(GPIOB, 7, LOW);
     return;
   }
   
   int32 desiredVolts = sineLookup[cycleIndex];
+  desiredVolts = (int32) (desiredVolts * inputFactor);
+  desiredVolts = (int32) (desiredVolts /100);
   findMask(cycleIndex,desiredVolts);
   
 //  Bin2Char(message,outputDrive);
 //  Serial << "# " << cycleIndex << " v= " << desiredVolts << 
 //          " lastIdx= " << lastVoltageLookupIndex << 
 //          " Drv= " << _BIN(outputDrive) << "  bin2char= " << message << endl;
-  gpio_write_bit(GPIOA, 4, LOW);
+  
 }
+
+
+/*--------------------
+ * 
+ *     Is called at the beginning of every 50Hz cycle
+ *     -  Calculates the inputFactor.
+ *          InputFactor is the ratio of average Battery Voltage 
+ *          to Nominal Battery Voltage.
+ *     -  InputFactor is applied to desiredVoltage to adjust 
+ *          the output Voltage.
+ * 
+ ---------------------*/
 
 void proc_NewCycle()
 {
-  //inputFactor = (int32) ( batteryVoltage * 100u) ;
-  //inputFactor = inputFactor / NOMINAL_BATTERY_VOLTAGE;
-  inputFactor = nominalBatteryMicroVolts / batteryVoltage;
+ 
+  inputFactor = (Xfactor / avgADC_V);
+  
 }
 
 
