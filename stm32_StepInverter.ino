@@ -371,30 +371,7 @@ void findMask(uint currentStep,int32 matchVolts)
     index = findMaskDn(lastVoltageLookupIndex,matchVolts);
   }
   lastVolts = matchVolts;
-//  if (index<0)
-//  {
-//    //Serial << "err - CI = " << cycleIndex <<  "   diff = " << diff << "    DesiredVolts = " << matchVolts << "   LastLookupVoltage = " << outputVoltageLookup[lastVoltageLookupIndex] << endl;
-//    pMessage.begin();
-//    pMessage << "err CI= " << cycleIndex <<  "   diff = " << diff  ;
-//    //Serial.print(message);pMessage.begin();
-//    pMessage << " DV = " << matchVolts ;
-//    pMessage << " LL = " << lastVoltageLookupIndex;
-//    pMessage << " : " <<  outputVoltageLookup[lastVoltageLookupIndex];
-//    Serial.println(message);
-//    //Serial << "   LastLookupVoltage = " << outputVoltageLookup[lastVoltageLookupIndex] << endl;
-//    //Serial.flush();
-//    //delay(20);
-//  }
-//  else
-//  {
-//    pMessage.begin();
-//    pMessage << "GOOD - CI = " << cycleIndex <<  " diff = " << diff  ;
-//    pMessage << " DV = " << matchVolts ;
-//    pMessage << " LL = " << lastVoltageLookupIndex;
-//    pMessage << " : " <<  outputVoltageLookup[lastVoltageLookupIndex];
-//    pMessage << " DX = " << index;
-//    Serial.println(message);
-//  }
+
   if (lastVoltageLookupIndex != index && index >-1)
   {
     lastVoltageLookupIndex = index;
