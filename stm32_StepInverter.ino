@@ -30,7 +30,7 @@ int32  Xfactor;
 
 bool inverterRunning = false;
 
-HardwareTimer inverterTimer(4);
+HardwareTimer inverterTimer(3);//4
 
 #define NOMINAL_VAC  240
 #define NOMINAL_BATTERY_VOLTAGE 27000    // in milliVolts
@@ -45,10 +45,11 @@ int16 outputVoltageLookup[VOLTSTEPS];   // in Volts * 10 ie 2350 = 235.0 volts
 int8 transformerMask[VOLTSTEPS][TRANSFORMER_COUNT];
 uint8 outputMaskTable[VOLTSTEPS];
 
-char message[50];
+char message[256];
 PString pMessage(message,sizeof(message));
 
 #define LED      PC13
+//#define SERIAL_TX_BUFFER_SIZE 512
 
 void setup() 
 {
@@ -143,7 +144,7 @@ void setup()
   
   inverterTimer.setMode(TIMER_CH4, TIMER_OUTPUT_COMPARE);
   inverterTimer.pause();
-  inverterTimer.setPrescaleFactor(1);
+  inverterTimer.setPrescaleFactor(1);//1
   inverterTimer.setCount(0);
   inverterTimer.setOverflow(1406);//1406
   inverterTimer.setCompare(TIMER_CH4, 1);  
@@ -312,11 +313,13 @@ void proc_nextOutputValue()
   if (cycleIndex >= STEPS) 
   {
     //gpio_write_bit(GPIOB, 7, HIGH);
+    //Serial << "CI#= " << cycleIndex << endl;
+    gpio_write_bit(GPIOB, 7, HIGH);
     avgADC_V = 368640;   // comment out when activating ADC
     cycleIndex = 0;
-    proc_NewCycle();    
-    outputDrive = outputMaskTable[0];
-    //gpio_write_bit(GPIOB, 7, LOW);
+    proc_NewCycle(); 
+    outputDrive = 0;
+    gpio_write_bit(GPIOB, 7, LOW);
     return;
   }
   
@@ -368,6 +371,30 @@ void findMask(uint currentStep,int32 matchVolts)
     index = findMaskDn(lastVoltageLookupIndex,matchVolts);
   }
   lastVolts = matchVolts;
+//  if (index<0)
+//  {
+//    //Serial << "err - CI = " << cycleIndex <<  "   diff = " << diff << "    DesiredVolts = " << matchVolts << "   LastLookupVoltage = " << outputVoltageLookup[lastVoltageLookupIndex] << endl;
+//    pMessage.begin();
+//    pMessage << "err CI= " << cycleIndex <<  "   diff = " << diff  ;
+//    //Serial.print(message);pMessage.begin();
+//    pMessage << " DV = " << matchVolts ;
+//    pMessage << " LL = " << lastVoltageLookupIndex;
+//    pMessage << " : " <<  outputVoltageLookup[lastVoltageLookupIndex];
+//    Serial.println(message);
+//    //Serial << "   LastLookupVoltage = " << outputVoltageLookup[lastVoltageLookupIndex] << endl;
+//    //Serial.flush();
+//    //delay(20);
+//  }
+//  else
+//  {
+//    pMessage.begin();
+//    pMessage << "GOOD - CI = " << cycleIndex <<  " diff = " << diff  ;
+//    pMessage << " DV = " << matchVolts ;
+//    pMessage << " LL = " << lastVoltageLookupIndex;
+//    pMessage << " : " <<  outputVoltageLookup[lastVoltageLookupIndex];
+//    pMessage << " DX = " << index;
+//    Serial.println(message);
+//  }
   if (lastVoltageLookupIndex != index && index >-1)
   {
     lastVoltageLookupIndex = index;
@@ -380,7 +407,23 @@ void findMask(uint currentStep,int32 matchVolts)
 
 int16 findMaskUp(uint8 lookupindex, int32 matchVolts)
 {
-  if (lookupindex < 1) lookupindex = 1;
+  
+  if (lookupindex < 1)
+  {
+    if (matchVolts <= outputVoltageLookup[0])
+    {
+      return(0);
+    }
+    lookupindex = 1;
+  }
+  
+  if (lookupindex >= voltSteps-1)
+  {
+    if (matchVolts > outputVoltageLookup[voltSteps-1])
+    {
+      return(voltSteps-1);
+    }
+  }
   for (int i=lookupindex;i<voltSteps;i++)
   {
     if (matchVolts == outputVoltageLookup[i])
@@ -400,6 +443,13 @@ int16 findMaskUp(uint8 lookupindex, int32 matchVolts)
 
 int16 findMaskDn(uint8 lookupindex, int32 matchVolts)
 {
+  if (lookupindex <=1)
+  {
+    if (matchVolts < outputVoltageLookup[1])
+    {
+      return(0);
+    }
+  }
   for (int i=lookupindex;i>0;i--)
   {
     if (matchVolts > outputVoltageLookup[voltSteps-1])return (voltSteps-1);
@@ -489,6 +539,8 @@ void fill_outputDriveTable()
       outputMaskTable[i] += state * mult;
     }
   }
+
+  
 }
 
 void fill_outputVoltageTable()
